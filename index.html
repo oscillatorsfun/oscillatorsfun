@@ -1,0 +1,324 @@
+<!doctype html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Oscillators</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/water.css@2/out/dark.min.css">
+    <script src="//unpkg.com/@alpinejs/persist@3.10.4" defer></script>
+    <script src="//unpkg.com/alpinejs@3.10.4" defer></script>
+    <script src="//cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js" integrity="sha512-ElRFoEQdI5Ht6kZvyzXhYG9NqjtkmlkfYk0wr6wHxU9JEHakS7UJZNeml5ALk+8IKlU6jDgMabC3vkumRokgJA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <style>
+        body {
+            max-width: 1500px;
+        }
+        input {
+            display: inline-block;
+        }
+        .column {
+            display: flex;
+        }
+    </style>
+</head>
+<div style="margin: 0 auto" x-data="audio">
+    <label for="carrierFrequency">Carrier frequency</label>
+    <input id="carrierFrequency" x-model="carrierFreq" type="number" min="400" max="4000">
+    <button @click="start()">start</button>
+    <button @click="stop()">stop</button>
+    <div>
+        <h3>Presets</h3>
+        <template x-for="(preset, name) in presets">
+            <div>
+                <span x-text="name"></span>
+                <button @click="loadPreset(name, oscillators.left)">Load left</button>
+                <button @click="loadPreset(name, oscillators.right)">Load right</button>
+                <button @click="removePreset(name)">Remove</button>
+            </div>
+        </template>
+    </div>
+    <div class="column">
+        <div>
+            <h3>Left</h3>
+            <div>
+                <button @click="savePreset(leftName, oscillators.left)">Save preset</button>
+                <input x-model="leftName">
+            </div>
+            <div>
+                <button @click="addOscillator(oscillators.left)">Add oscillator</button>
+            </div>
+            <template x-for="(oscillator, i) in oscillators.left">
+                <div>
+                    <label>Frequency</label>
+                    <input type="number" min="0" step="0.1" max="10" x-model="oscillator.frequency">
+                    <input type="range" min="0" step="0.1" max="10" x-model="oscillator.frequency">
+
+                    <label>Delay</label>
+                    <input type="number" min="0" step="0.1" max="10" x-model="oscillator.delay">
+                    <input type="range" min="0" step="0.1" max="10" x-model="oscillator.delay">
+
+                    <button @click="removeOscillator(oscillators.left, i)">Remove</button>
+                </div>
+            </template>
+        </div>
+        <div>
+            <h3>Right</h3>
+            <div>
+                <button @click="savePreset(rightName, oscillators.right)">Save preset</button>
+                <input x-model="rightName">
+            </div>
+            <div>
+                <button @click="addOscillator(oscillators.right)">Add oscillator</button>
+            </div>
+            <template x-for="(oscillator, i) in oscillators.right">
+                <div>
+                    <label>Frequency</label>
+                    <input type="number" min="0" step="0.1" max="10" x-model="oscillator.frequency">
+                    <input type="range" min="0" step="0.1" max="10" x-model="oscillator.frequency">
+                    <label>Delay</label>
+                    <input type="number" min="0" step="0.1" max="10" x-model="oscillator.delay">
+                    <input type="range" min="0" step="0.1" max="10" x-model="oscillator.delay">
+                    <button @click="removeOscillator(oscillators.right, i)">Remove</button>
+                </div>
+            </template>
+        </div>
+    </div>
+    <div class="column">
+        <canvas id="leftChart" style="display: inline-block" width="730"></canvas>
+        <canvas id="rightChart" style="display: inline-block" width="730"></canvas>
+    </div>
+</div>
+
+<script>
+    document.addEventListener('alpine:init', () => {
+        const player = new Player()
+        const showSeconds = 4
+        const refreshRate = 60
+        const stepSize = 1000/refreshRate
+        const leftChart = new LineChart('leftChart', showSeconds, refreshRate)
+        const rightChart = new LineChart('rightChart', showSeconds, refreshRate)
+        leftChart.init()
+        rightChart.init()
+        const visualizer = new Visualizer(leftChart, rightChart, stepSize)
+        Alpine.data('audio', function() {
+            return {
+                carrierFreq: this.$persist(1000),
+                oscillators: this.$persist({
+                    left: [],
+                    right: [],
+                }),
+                presets: this.$persist({}),
+                leftName: "",
+                rightName: "",
+
+                start() {
+                    player.start(this.oscillators, this.carrierFreq)
+                    visualizer.start(this.oscillators)
+                },
+
+                stop() {
+                    visualizer.stop()
+                    player.stop()
+                },
+
+                clone(obj) {
+                    return JSON.parse(JSON.stringify(obj))
+                },
+
+                savePreset(name, preset) {
+                    this.presets[name] = this.clone(preset)
+                    console.log(this.presets)
+                },
+
+                loadPreset(name, oscillators) {
+                    console.log(name)
+                    oscillators.length = 0
+                    const preset = this.clone(this.presets[name])
+                    preset.forEach(oscillator => {
+                        oscillators.push(oscillator)
+                    })
+                },
+
+                removePreset(name) {
+                    delete this.presets[name]
+                },
+
+                addOscillator(channel) {
+                    channel.push({
+                        frequency: 1,
+                        delay: 0
+                    })
+                    this.stop()
+                },
+
+                removeOscillator(channel, index) {
+                    channel.splice(index, 1)
+                    this.stop()
+                }
+            }
+        })
+    })
+</script>
+
+<script>
+    class Visualizer {
+        charts = {left: null, right: null}
+        oscillators = {left: [], right: []}
+        data = {left: [], right: []}
+        offset = 0
+        interval
+        stepSize
+
+        constructor(left, right, stepSize) {
+            this.charts.left = left
+            this.charts.right = right
+            this.stepSize = stepSize
+        }
+
+        start(oscillators) {
+            this.stop()
+            this.oscillators = oscillators
+            this.offset = 0
+            this.interval = setInterval(this.tick.bind(this), this.stepSize)
+        }
+
+        update(chart, data, oscillators) {
+            let next = 0
+            oscillators.forEach(oscillator => {
+                const t = Math.max(this.offset - oscillator.delay, 0)
+                next += Math.sin(t*2*Math.PI*oscillator.frequency)
+            })
+
+            next/=oscillators.length
+            data.push(next)
+            if(data.length > chart.points) {
+                data.shift()
+            }
+
+            chart.update(data)
+        }
+
+        tick() {
+            this.update(this.charts.left, this.data.left, this.oscillators.left)
+            this.update(this.charts.right, this.data.right, this.oscillators.right)
+            this.offset += this.stepSize/1000
+        }
+
+        stop() {
+            this.data.left = []
+            this.data.right = []
+            this.charts.left.update(this.data)
+            this.charts.right.update(this.data)
+            clearInterval(this.interval)
+        }
+    }
+
+    class LineChart {
+        id
+        chart
+        ctx
+        points
+
+        constructor(id, showSeconds, refreshRate) {
+            this.id = id
+            this.points = refreshRate*showSeconds+1
+        }
+
+        update(data) {
+            this.chart.data.datasets[0].data = data
+            this.chart.update()
+        }
+
+        init() {
+            const indices = Array.from(Array(this.points+1).keys()).map(i => Math.round((i/((this.points-1)/4) + Number.EPSILON) * 100) / 100)
+            this.ctx = document.getElementById(this.id).getContext('2d');
+            this.chart = new Chart(this.ctx, {
+                type: 'line',
+                data: {
+                    labels: indices,
+                    datasets: [{
+                        data: [],
+                    }]
+                },
+                options: {
+                    borderColor: 'cyan',
+                    elements: {
+                        point: {
+                            radius: 0
+                        }
+                    },
+                    responsive: false,
+                    animation: false,
+                    scales: {
+                        y: {
+                            min: -1,
+                            max: 1,
+                            ticks: {
+                                color: "white"
+                            }
+                        },
+                        x: {
+                            ticks: {
+                                color: "white"
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: false
+                        }
+                    }
+                }
+            })
+        }
+    }
+
+    class Player {
+        ctx = new AudioContext()
+        gain = new GainNode(this.ctx)
+        pan = {
+            left: null,
+            right: null
+        }
+        carrier
+        nodes = []
+
+        constructor() {
+            this.gain.connect(this.ctx.destination)
+            this.pan.left = this.createPan(-1)
+            this.pan.right = this.createPan(1)
+        }
+
+        createPan(channel) {
+            const pan = new StereoPannerNode(this.ctx)
+            pan.pan.setValueAtTime(channel, this.ctx.currentTime)
+            pan.connect(this.gain)
+
+            return pan
+        }
+
+        startPan(oscillators, pan, time) {
+            oscillators.forEach(oscillator => {
+                let node = new OscillatorNode(this.ctx, {frequency: oscillator.frequency})
+                node.connect(pan)
+                this.nodes.push(node)
+                node.start(time + oscillator.delay)
+            })
+        }
+
+        start(oscillators, carrierFreq) {
+            this.stop()
+            this.carrier = new OscillatorNode(this.ctx, {frequency: carrierFreq})
+            this.carrier.connect(this.gain)
+            const time = this.ctx.currentTime
+
+            this.startPan(oscillators.left, this.pan.left, time)
+            this.startPan(oscillators.right, this.pan.right, time)
+            this.carrier.start(time)
+        }
+
+        stop() {
+            this.carrier?.stop()
+            this.nodes.forEach(node => node.stop())
+            this.nodes = []
+        }
+    }
+</script>
